@@ -70,36 +70,39 @@ int main()
     igm.show_mesh_points();
     igm.updateGL();
 
-    Octree o;
-    o.build_from_mesh_edges(cps);
-    cps.edge_set_flag(MARKED, false);
-    std::vector<vec4i> cps_igm_e_inters; // (i,j) => cps edge verts, (k,l) => igm edge verts
-    for(uint eid=0; eid<igm.num_edges(); ++eid)
+    // split CPS edges to incorporate the IGM in the connectivity
+    Octree oo;
+    oo.build_from_mesh_edges(igm);
+    // edge IDs are not safe if edge_split is called
+    // operate on a queue of pairs of vertex ids
+    std::queue<vec2i> q;
+    for(uint eid=0; eid<cps.num_edges(); ++eid)
     {
-        if(igm.edge_is_boundary(eid)) continue;
-        std::unordered_set<uint> ids;
-        o.intersects_segment(igm.edge_verts(eid).data(), true, ids);
-        for(uint id: ids)
+        if(!cps.edge_is_boundary(eid))
         {
-            if(cps.edge_is_boundary(id)) continue;
-            //cps.edge_data(id).flags[MARKED] = true;
-            vec4i inters;
-            inters[0] = cps.edge_vert_id( id,0);
-            inters[1] = cps.edge_vert_id( id,1);
-            inters[2] = igm.edge_vert_id(eid,0);
-            inters[3] = igm.edge_vert_id(eid,1);
-            cps_igm_e_inters.push_back(inters);
+            q.push(vec2i(cps.edge_vert_id(eid,0),
+                         cps.edge_vert_id(eid,1)));
         }
     }
-
-    for(const vec4i & inters : cps_igm_e_inters)
+    while(!q.empty())
     {
-        vec3d p = segment_intersection(cps.vert(inters[0]),
-                                       cps.vert(inters[1]),
-                                       igm.vert(inters[2]),
-                                       igm.vert(inters[3]));
-        int eid = cps.edge_id(inters[0],inters[1]);
-        if(eid>=0) cps.edge_split(eid, p);
+        vec2i vids = q.front();
+        vec3d s[2] = {cps.vert(vids[0]),
+                      cps.vert(vids[1])};
+        q.pop();
+        std::unordered_set<uint> inters;
+        if(oo.intersects_segment(s, true, inters))
+        {
+            // TODO: handle multiple intersections!
+            vec3d p = segment_intersection(cps.vert(vids[0]),
+                                           cps.vert(vids[1]),
+                                           igm.edge_vert(*inters.begin(),0),
+                                           igm.edge_vert(*inters.begin(),1));
+
+            int eid = cps.edge_id(vids[0],vids[1]);
+            assert(eid>=0);
+            cps.edge_split(eid,p);
+        }
     }
     cps.updateGL();
 
@@ -130,10 +133,10 @@ int main()
     }
 
     GLcanvas gui;
-    SurfaceMeshControls<DrawableTrimesh<>> controls(&cps,&gui,"IGM");
     gui.push(&cps);
-//    gui.push(&igm);
-    gui.push(&controls);
+    gui.push(&igm);
+    gui.push(new SurfaceMeshControls<DrawableTrimesh<>> (&cps,&gui,"CPS"));
+    gui.push(new SurfaceMeshControls<DrawableQuadmesh<>>(&igm,&gui,"IGM"));
 
     return gui.launch();
 }
