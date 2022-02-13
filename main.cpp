@@ -13,6 +13,55 @@ using namespace cinolib;
 
 //::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
+void map_igm_cps(Quadmesh<> & igm,
+                 Trimesh<>  & cps)
+{
+    Octree igm_edges;
+    igm_edges.build_from_mesh_edges(igm);
+
+    // edge IDs are not safe if edge_split is called
+    // operate on a queue of pairs of vertex ids
+    std::queue<vec2i> q;
+    for(uint eid=0; eid<cps.num_edges(); ++eid)
+    {
+        if(!cps.edge_is_boundary(eid))
+        {
+            q.push(vec2i(cps.edge_vert_id(eid,0),
+                         cps.edge_vert_id(eid,1)));
+        }
+    }
+    while(!q.empty())
+    {
+        vec2i vids = q.front();
+        vec3d s[2] = {cps.vert(vids[0]),
+                      cps.vert(vids[1])};
+        q.pop();
+        std::unordered_set<uint> inters;
+        if(igm_edges.intersects_segment(s, true, inters))
+        {
+            // TODO: handle multiple intersections!
+            vec3d p = segment_intersection(cps.vert(vids[0]),
+                                           cps.vert(vids[1]),
+                                           igm.edge_vert(*inters.begin(),0),
+                                           igm.edge_vert(*inters.begin(),1));
+
+            int eid = cps.edge_id(vids[0],vids[1]);
+            assert(eid>=0);
+            cps.edge_split(eid,p);
+        }
+    }
+
+    /* TODO:
+     * insert IGM inner points
+     * map IGM vertices to CPS vertices
+     * mark IGM paths on CPS
+     * cut mesh along such paths
+     * texturing (done below)
+     */
+}
+
+//::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+
 void IGM(const uint genus, Quadmesh<> & igm)
 {
     std::vector<vec3d> verts = n_sided_polygon(4*genus, CIRCLE);
@@ -70,66 +119,30 @@ int main()
     igm.show_mesh_points();
     igm.updateGL();
 
-    // split CPS edges to incorporate the IGM in the connectivity
-    Octree oo;
-    oo.build_from_mesh_edges(igm);
-    // edge IDs are not safe if edge_split is called
-    // operate on a queue of pairs of vertex ids
-    std::queue<vec2i> q;
-    for(uint eid=0; eid<cps.num_edges(); ++eid)
-    {
-        if(!cps.edge_is_boundary(eid))
-        {
-            q.push(vec2i(cps.edge_vert_id(eid,0),
-                         cps.edge_vert_id(eid,1)));
-        }
-    }
-    while(!q.empty())
-    {
-        vec2i vids = q.front();
-        vec3d s[2] = {cps.vert(vids[0]),
-                      cps.vert(vids[1])};
-        q.pop();
-        std::unordered_set<uint> inters;
-        if(oo.intersects_segment(s, true, inters))
-        {
-            // TODO: handle multiple intersections!
-            vec3d p = segment_intersection(cps.vert(vids[0]),
-                                           cps.vert(vids[1]),
-                                           igm.edge_vert(*inters.begin(),0),
-                                           igm.edge_vert(*inters.begin(),1));
-
-            int eid = cps.edge_id(vids[0],vids[1]);
-            assert(eid>=0);
-            cps.edge_split(eid,p);
-        }
-    }
+    map_igm_cps(igm,cps);
     cps.updateGL();
 
-
+    Octree o;
+    o.build_from_mesh_polys(igm);
+    for(uint vid=0; vid<cps.num_verts(); ++vid)
     {
-        Octree o;
-        o.build_from_mesh_polys(igm);
-        for(uint vid=0; vid<cps.num_verts(); ++vid)
-        {
-            uint   pid;
-            vec3d  pos;
-            double dist;
-            o.closest_point(cps.vert(vid), pid, pos, dist);
-            assert(dist<1e-10);
+        uint   pid;
+        vec3d  pos;
+        double dist;
+        o.closest_point(cps.vert(vid), pid, pos, dist);
+        assert(dist<1e-10);
 
-            vec4d bary;
-            quad_barycentric_coords(igm.poly_vert(pid,0),
-                                    igm.poly_vert(pid,1),
-                                    igm.poly_vert(pid,2),
-                                    igm.poly_vert(pid,3),
-                                    cps.vert(vid), bary);
+        vec4d bary;
+        quad_barycentric_coords(igm.poly_vert(pid,0),
+                                igm.poly_vert(pid,1),
+                                igm.poly_vert(pid,2),
+                                igm.poly_vert(pid,3),
+                                cps.vert(vid), bary);
 
-            cps.vert_data(vid).uvw = vec3d(0,0,0) * bary[0] +
-                                     vec3d(1,0,0) * bary[1] +
-                                     vec3d(1,1,0) * bary[2] +
-                                     vec3d(0,1,0) * bary[3];
-        }
+        cps.vert_data(vid).uvw = vec3d(0,0,0) * bary[0] +
+                                 vec3d(1,0,0) * bary[1] +
+                                 vec3d(1,1,0) * bary[2] +
+                                 vec3d(0,1,0) * bary[3];
     }
 
     GLcanvas gui;
@@ -137,6 +150,5 @@ int main()
     gui.push(&igm);
     gui.push(new SurfaceMeshControls<DrawableTrimesh<>> (&cps,&gui,"CPS"));
     gui.push(new SurfaceMeshControls<DrawableQuadmesh<>>(&igm,&gui,"IGM"));
-
     return gui.launch();
 }
