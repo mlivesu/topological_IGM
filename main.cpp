@@ -126,11 +126,9 @@ void bilinear_texturing(Quadmesh<> & igm,
 
     // use labels to distinguish IGM domains
     std::vector<std::unordered_set<uint>> ccs;
-    uint n_labels = connected_components(obj, ccs);
+    uint n_labels = connected_components(cps, ccs);
     std::cout << n_labels << " connected_components - " << igm.num_polys() << " IGM domains " << std::endl;
     int l = 0;
-    n_labels = connected_components(cps, ccs);
-    std::cout << n_labels << " connected_components - " << igm.num_polys() << " IGM domains " << std::endl;
     for(auto & cc : ccs)
     {
         for(uint vid : cc)
