@@ -8,56 +8,136 @@
 #include <cinolib/octree.h>
 #include <cinolib/geometry/quad_utils.h>
 #include <cinolib/geometry/segment_utils.h>
+#include <cinolib/dijkstra.h>
+#include <cinolib/connected_components.h>
 
 using namespace cinolib;
+
+//::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+
+void overlay_IGM_and_CPS(Quadmesh<> & igm,
+                         Trimesh<>  & cps)
+{
+    // add IGM inner vertices inside the CPS
+    Octree o;
+    o.build_from_mesh_polys(cps);
+    for(uint vid=0; vid<igm.num_verts(); ++vid)
+    {
+        if(igm.vert_is_boundary(vid)) continue;
+
+        uint pid;
+        if(o.contains(igm.vert(vid), true, pid))
+        {
+            cps.poly_split(pid, igm.vert(vid));
+        }
+    }
+
+    // add IGM inner edges inside the CPS
+    for(uint igm_eid=0; igm_eid<igm.num_edges(); ++igm_eid)
+    {
+        if(igm.edge_is_boundary(igm_eid)) continue;
+
+        // I hate this, but since the content of the octree is dynamic (due to edge splits in the loop)
+        // I have no other choice than making a new octree from scratch every time. Note that adding sub
+        // segments in the tree is not a valid choice because  after splits edge ids will become inconsistent...
+        Octree o;
+        o.build_from_mesh_edges(cps);
+        std::unordered_set<uint> eids;
+        if(o.intersects_segment(igm.edge_verts(igm_eid).data(), true, eids))
+        {
+            std::set<uint,std::greater<uint>> ord_eids(eids.begin(),eids.end());
+            for(uint cps_eid : ord_eids)
+            {
+                vec3d p = segment_intersection(cps.edge_vert(cps_eid,0),
+                                               cps.edge_vert(cps_eid,1),
+                                               igm.edge_vert(igm_eid,0),
+                                               igm.edge_vert(igm_eid,1));
+
+                double d0 = p.dist(cps.edge_vert(cps_eid,0));
+                double d1 = p.dist(cps.edge_vert(cps_eid,1));
+                // avoid creating tiny edges
+                if(std::min(d0,d1)>1e-7)
+                {
+                    cps.edge_split(cps_eid,p);
+                }
+            }
+        }
+    }
+}
 
 //::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
 void map_igm_cps(Quadmesh<> & igm,
                  Trimesh<>  & cps)
 {
-    Octree igm_edges;
-    igm_edges.build_from_mesh_edges(igm);
+    overlay_IGM_and_CPS(igm,cps);
 
-    // edge IDs are not safe if edge_split is called
-    // operate on a queue of pairs of vertex ids
-    std::queue<vec2i> q;
-    for(uint eid=0; eid<cps.num_edges(); ++eid)
+    std::vector<uint> v_igm2cps(igm.num_verts());
+    // cut the mesh open in order to have each quad in the IGM
+    // to be a separate domain  in the CPS (just for the sake of
+    // texturing). Edges in CPS are created connecting corners
+    // using Dijkstra's algorithm
+    cps.edge_set_flag(MARKED,false);
+    for(uint eid=0; eid<igm.num_edges(); ++eid)
     {
-        if(!cps.edge_is_boundary(eid))
+        if(igm.edge_is_boundary(eid)) continue;
+        uint v0 = v_igm2cps.at(igm.edge_vert_id(eid,0));
+        uint v1 = v_igm2cps.at(igm.edge_vert_id(eid,1));
+        std::vector<uint> path;
+        dijkstra(cps, v0, v1, path);
+        for(uint i=0; i<path.size()-1; ++i)
         {
-            q.push(vec2i(cps.edge_vert_id(eid,0),
-                         cps.edge_vert_id(eid,1)));
-        }
-    }
-    while(!q.empty())
-    {
-        vec2i vids = q.front();
-        vec3d s[2] = {cps.vert(vids[0]),
-                      cps.vert(vids[1])};
-        q.pop();
-        std::unordered_set<uint> inters;
-        if(igm_edges.intersects_segment(s, true, inters))
-        {
-            // TODO: handle multiple intersections!
-            vec3d p = segment_intersection(cps.vert(vids[0]),
-                                           cps.vert(vids[1]),
-                                           igm.edge_vert(*inters.begin(),0),
-                                           igm.edge_vert(*inters.begin(),1));
-
-            int eid = cps.edge_id(vids[0],vids[1]);
+            int eid = cps.edge_id(path[i],path[i+1]);
             assert(eid>=0);
-            cps.edge_split(eid,p);
+            cps.edge_data(eid).flags[MARKED] = true;
         }
     }
+    cut_mesh_along_marked_edges(cps);
 
-    /* TODO:
-     * insert IGM inner points
-     * map IGM vertices to CPS vertices
-     * mark IGM paths on CPS
-     * cut mesh along such paths
-     * texturing (done below)
-     */
+//    // label each connected component separately
+//    std::vector<std::unordered_set<uint>> ccs;
+//    uint n_labels = connected_components(cps, ccs);
+//    std::cout << n_labels << " connected_components" << std::endl;
+//    int l = 0;
+//    for(auto & cc : ccs)
+//    {
+//        for(uint vid : cc)
+//        {
+//            cps.vert_data(vid).label = l;
+//            for(uint pid : cps.adj_v2p(vid))
+//            {
+//                cps.poly_data(pid).label = l;
+//            }
+//        }
+//        ++l;
+//    }
+//    cps.poly_color_wrt_label();
+
+//    // apply bilinear texturing
+//    std::vector<uint> lab2igm(n_labels,0);
+//    for(uint pid=0; pid<igm.num_polys(); ++pid)
+//    {
+//        uint id;
+//        cps_bvh.contains(igm.poly_centroid(pid), false, id);
+//        lab2igm.at(cps.poly_data(id).label) = pid;
+//    }
+//    for(uint vid=0; vid<cps.num_verts(); ++vid)
+//    {
+//        uint pid = lab2igm.at(cps.vert_data(vid).label);
+
+//        vec4d bary;
+//        quad_barycentric_coords(igm.poly_vert(pid,0),
+//                                igm.poly_vert(pid,1),
+//                                igm.poly_vert(pid,2),
+//                                igm.poly_vert(pid,3),
+//                                cps.vert(vid), bary);
+
+//        // quad in uv space
+//        cps.vert_data(vid).uvw = vec3d(0,0,0) * bary[0] +
+//                                 vec3d(1,0,0) * bary[1] +
+//                                 vec3d(1,1,0) * bary[2] +
+//                                 vec3d(0,1,0) * bary[3];
+//    }
 }
 
 //::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
@@ -122,32 +202,9 @@ int main()
     map_igm_cps(igm,cps);
     cps.updateGL();
 
-    Octree o;
-    o.build_from_mesh_polys(igm);
-    for(uint vid=0; vid<cps.num_verts(); ++vid)
-    {
-        uint   pid;
-        vec3d  pos;
-        double dist;
-        o.closest_point(cps.vert(vid), pid, pos, dist);
-        assert(dist<1e-10);
-
-        vec4d bary;
-        quad_barycentric_coords(igm.poly_vert(pid,0),
-                                igm.poly_vert(pid,1),
-                                igm.poly_vert(pid,2),
-                                igm.poly_vert(pid,3),
-                                cps.vert(vid), bary);
-
-        cps.vert_data(vid).uvw = vec3d(0,0,0) * bary[0] +
-                                 vec3d(1,0,0) * bary[1] +
-                                 vec3d(1,1,0) * bary[2] +
-                                 vec3d(0,1,0) * bary[3];
-    }
-
     GLcanvas gui;
     gui.push(&cps);
-    gui.push(&igm);
+//    gui.push(&igm);
     gui.push(new SurfaceMeshControls<DrawableTrimesh<>> (&cps,&gui,"CPS"));
     gui.push(new SurfaceMeshControls<DrawableQuadmesh<>>(&igm,&gui,"IGM"));
     return gui.launch();
