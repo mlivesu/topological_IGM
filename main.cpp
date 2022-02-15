@@ -16,7 +16,8 @@ using namespace cinolib;
 //::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
 void overlay_IGM_and_CPS(Quadmesh<> & igm,
-                         Trimesh<>  & cps)
+                         Trimesh<>  & cps,
+                         Trimesh<>  & obj)
 {
     // add IGM inner vertices inside the CPS
     Octree o;
@@ -34,6 +35,17 @@ void overlay_IGM_and_CPS(Quadmesh<> & igm,
             // the pid may not be the one containing the second point.
             // Here I am assuming this will never happen...
             cps.poly_split(pid, igm.vert(vid));
+
+            // replicate the same move in object space
+            double w[3];
+            triangle_barycentric_coords(cps.poly_vert(pid,0),
+                                        cps.poly_vert(pid,1),
+                                        cps.poly_vert(pid,2),
+                                        igm.vert(vid), w);
+
+            obj.poly_split(pid, w[0]*obj.poly_vert(pid,0)+
+                                w[1]*obj.poly_vert(pid,1)+
+                                w[2]*obj.poly_vert(pid,2));
         }
     }
 
@@ -63,7 +75,10 @@ void overlay_IGM_and_CPS(Quadmesh<> & igm,
                 // avoid creating tiny edges
                 if(std::min(d0,d1)>1e-7)
                 {
-                    cps.edge_split(cps_eid,p);
+                    // replicate move in object space
+                    float t = d0/(d0+d1);
+                    obj.edge_split(cps_eid, t);
+                    cps.edge_split(cps_eid, t);
                 }
             }
         }
@@ -73,7 +88,8 @@ void overlay_IGM_and_CPS(Quadmesh<> & igm,
 //::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
 void bilinear_texturing(Quadmesh<> & igm,
-                        Trimesh<>  & cps)
+                        Trimesh<>  & cps,
+                        Trimesh<>  & obj)
 {
     // create seams along IGM edges so that
     // each quad can be textured separately
@@ -89,6 +105,7 @@ void bilinear_texturing(Quadmesh<> & igm,
         vmap.at(vid) = cps_vid;
     }
     cps.edge_set_flag(MARKED,false);
+    obj.edge_set_flag(MARKED,false);
     for(uint eid=0; eid<igm.num_edges(); ++eid)
     {
         if(igm.edge_is_boundary(eid)) continue;
@@ -101,28 +118,35 @@ void bilinear_texturing(Quadmesh<> & igm,
             int eid = cps.edge_id(path[i],path[i+1]);
             assert(eid>=0);
             cps.edge_data(eid).flags[MARKED] = true;
+            obj.edge_data(eid).flags[MARKED] = true;
         }
     }
     cut_mesh_along_marked_edges(cps);
+    cut_mesh_along_marked_edges(obj);
 
     // use labels to distinguish IGM domains
     std::vector<std::unordered_set<uint>> ccs;
-    uint n_labels = connected_components(cps, ccs);
+    uint n_labels = connected_components(obj, ccs);
     std::cout << n_labels << " connected_components - " << igm.num_polys() << " IGM domains " << std::endl;
     int l = 0;
+    n_labels = connected_components(cps, ccs);
+    std::cout << n_labels << " connected_components - " << igm.num_polys() << " IGM domains " << std::endl;
     for(auto & cc : ccs)
     {
         for(uint vid : cc)
         {
             cps.vert_data(vid).label = l;
+            obj.vert_data(vid).label = l;
             for(uint pid : cps.adj_v2p(vid))
             {
                 cps.poly_data(pid).label = l;
+                obj.poly_data(pid).label = l;
             }
         }
         ++l;
     }
     cps.poly_color_wrt_label();
+    obj.poly_color_wrt_label();
 
     // apply bilinear texturing
     Octree o_polys;
@@ -146,10 +170,13 @@ void bilinear_texturing(Quadmesh<> & igm,
                                 cps.vert(vid), bary);
 
         // quad in uv space
-        cps.vert_data(vid).uvw = vec3d(0,0,0) * bary[0] +
-                                 vec3d(1,0,0) * bary[1] +
-                                 vec3d(1,1,0) * bary[2] +
-                                 vec3d(0,1,0) * bary[3];
+        vec3d uvw = vec3d(0,0,0) * bary[0] +
+                    vec3d(1,0,0) * bary[1] +
+                    vec3d(1,1,0) * bary[2] +
+                    vec3d(0,1,0) * bary[3];
+
+        cps.vert_data(vid).uvw = uvw;
+        obj.vert_data(vid).uvw = uvw;
     }
 }
 
@@ -193,33 +220,41 @@ void IGM(const uint genus, Quadmesh<> & igm)
 
 int main()
 {
-    DrawableTrimesh<> m("/Users/cino/Desktop/tmp_data/eight.off");
-    uint genus = m.genus();
+    DrawableTrimesh<> obj("/Users/cino/Desktop/indorelax.obj"); //tmp_data/eight.off");
+    uint genus = obj.genus();
 
-    // compute optimal homotopy basis
+    // compute homotopy basis
     HomotopyBasisData hb;
     hb.globally_shortest = false;
     hb.detach_loops      = true;
     hb.split_strategy    = EDGE_SPLIT_STRATEGY;
-    homotopy_basis(m,hb);
+    homotopy_basis(obj,hb);
 
     DrawableTrimesh<> cps;
-    canonical_polygonal_schema(m, hb, cps);
+    canonical_polygonal_schema(obj, hb, cps);
 
     DrawableQuadmesh<> igm;
     IGM(genus,igm);
-    igm.show_marked_edge_width(5);
     igm.show_mesh_points();
-    igm.updateGL();
 
-    overlay_IGM_and_CPS(igm,cps);
-    bilinear_texturing(igm,cps);
+    overlay_IGM_and_CPS(igm,cps,obj);
+    bilinear_texturing(igm,cps,obj);
+
+    GLcanvas gui1,gui2;
+    gui1.push(&obj);
+    gui2.push(&cps);
+    gui1.push(new SurfaceMeshControls<DrawableTrimesh<>> (&obj,&gui1,"OBJ"));
+    gui1.push(new SurfaceMeshControls<DrawableTrimesh<>> (&cps,&gui1,"CPS"));
+
+    obj.show_wireframe(false);
+    obj.edge_mark_boundaries();
+    obj.show_texture2D(TEXTURE_2D_CHECKERBOARD, 1);
+    obj.updateGL();
+
+    cps.show_wireframe(false);
+    cps.edge_mark_boundaries();
+    cps.show_texture2D(TEXTURE_2D_CHECKERBOARD, 1);
     cps.updateGL();
 
-    GLcanvas gui;
-    gui.push(&cps);
-    gui.push(&igm);
-    gui.push(new SurfaceMeshControls<DrawableTrimesh<>> (&cps,&gui,"CPS"));
-    gui.push(new SurfaceMeshControls<DrawableQuadmesh<>>(&igm,&gui,"IGM"));
-    return gui.launch();
+    return gui1.launch({&gui2});
 }
