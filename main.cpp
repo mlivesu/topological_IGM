@@ -26,8 +26,13 @@ void overlay_IGM_and_CPS(Quadmesh<> & igm,
         if(igm.vert_is_boundary(vid)) continue;
 
         uint pid;
-        if(o.contains(igm.vert(vid), true, pid))
+        if(o.contains(igm.vert(vid), false, pid))
         {
+            // NOTE: this is save as long as each triangle in CPS
+            // contains at most one vertex of the IGM. If two points
+            // are on the same pid, the sub-triangle that inherits
+            // the pid may not be the one containing the second point.
+            // Here I am assuming this will never happen...
             cps.poly_split(pid, igm.vert(vid));
         }
     }
@@ -67,22 +72,28 @@ void overlay_IGM_and_CPS(Quadmesh<> & igm,
 
 //::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
-void map_igm_cps(Quadmesh<> & igm,
-                 Trimesh<>  & cps)
+void bilinear_texturing(Quadmesh<> & igm,
+                        Trimesh<>  & cps)
 {
-    overlay_IGM_and_CPS(igm,cps);
-
-    std::vector<uint> v_igm2cps(igm.num_verts());
-    // cut the mesh open in order to have each quad in the IGM
-    // to be a separate domain  in the CPS (just for the sake of
-    // texturing). Edges in CPS are created connecting corners
-    // using Dijkstra's algorithm
+    // create seams along IGM edges so that
+    // each quad can be textured separately
+    Octree o;
+    o.build_from_mesh_points(cps);
+    std::vector<uint> vmap(igm.num_verts()); // IGM => CPS vmap
+    for(uint vid=0; vid<igm.num_verts(); ++vid)
+    {
+        uint   cps_vid;
+        vec3d  pos;
+        double dist;
+        o.closest_point(igm.vert(vid), cps_vid, pos, dist);
+        vmap.at(vid) = cps_vid;
+    }
     cps.edge_set_flag(MARKED,false);
     for(uint eid=0; eid<igm.num_edges(); ++eid)
     {
         if(igm.edge_is_boundary(eid)) continue;
-        uint v0 = v_igm2cps.at(igm.edge_vert_id(eid,0));
-        uint v1 = v_igm2cps.at(igm.edge_vert_id(eid,1));
+        uint v0 = vmap.at(igm.edge_vert_id(eid,0));
+        uint v1 = vmap.at(igm.edge_vert_id(eid,1));
         std::vector<uint> path;
         dijkstra(cps, v0, v1, path);
         for(uint i=0; i<path.size()-1; ++i)
@@ -94,50 +105,52 @@ void map_igm_cps(Quadmesh<> & igm,
     }
     cut_mesh_along_marked_edges(cps);
 
-//    // label each connected component separately
-//    std::vector<std::unordered_set<uint>> ccs;
-//    uint n_labels = connected_components(cps, ccs);
-//    std::cout << n_labels << " connected_components" << std::endl;
-//    int l = 0;
-//    for(auto & cc : ccs)
-//    {
-//        for(uint vid : cc)
-//        {
-//            cps.vert_data(vid).label = l;
-//            for(uint pid : cps.adj_v2p(vid))
-//            {
-//                cps.poly_data(pid).label = l;
-//            }
-//        }
-//        ++l;
-//    }
-//    cps.poly_color_wrt_label();
+    // use labels to distinguish IGM domains
+    std::vector<std::unordered_set<uint>> ccs;
+    uint n_labels = connected_components(cps, ccs);
+    std::cout << n_labels << " connected_components - " << igm.num_polys() << " IGM domains " << std::endl;
+    int l = 0;
+    for(auto & cc : ccs)
+    {
+        for(uint vid : cc)
+        {
+            cps.vert_data(vid).label = l;
+            for(uint pid : cps.adj_v2p(vid))
+            {
+                cps.poly_data(pid).label = l;
+            }
+        }
+        ++l;
+    }
+    cps.poly_color_wrt_label();
 
-//    // apply bilinear texturing
-//    std::vector<uint> lab2igm(n_labels,0);
-//    for(uint pid=0; pid<igm.num_polys(); ++pid)
-//    {
-//        uint id;
-//        cps_bvh.contains(igm.poly_centroid(pid), false, id);
-//        lab2igm.at(cps.poly_data(id).label) = pid;
-//    }
-//    for(uint vid=0; vid<cps.num_verts(); ++vid)
-//    {
-//        uint pid = lab2igm.at(cps.vert_data(vid).label);
+    // apply bilinear texturing
+    Octree o_polys;
+    o_polys.build_from_mesh_polys(cps);
+    std::vector<uint> lab2igm(n_labels,0);
+    for(uint pid=0; pid<igm.num_polys(); ++pid)
+    {
+        uint id;
+        o_polys.contains(igm.poly_centroid(pid), false, id);
+        lab2igm.at(cps.poly_data(id).label) = pid;
+    }
+    for(uint vid=0; vid<cps.num_verts(); ++vid)
+    {
+        uint pid = lab2igm.at(cps.vert_data(vid).label);
 
-//        vec4d bary;
-//        quad_barycentric_coords(igm.poly_vert(pid,0),
-//                                igm.poly_vert(pid,1),
-//                                igm.poly_vert(pid,2),
-//                                igm.poly_vert(pid,3),
-//                                cps.vert(vid), bary);
+        vec4d bary;
+        quad_barycentric_coords(igm.poly_vert(pid,0),
+                                igm.poly_vert(pid,1),
+                                igm.poly_vert(pid,2),
+                                igm.poly_vert(pid,3),
+                                cps.vert(vid), bary);
 
-//        // quad in uv space
-//        cps.vert_data(vid).uvw = vec3d(0,0,0) * bary[0] +
-//                                 vec3d(1,0,0) * bary[1] +
-//                                 vec3d(1,1,0) * bary[2] +
-//                                 vec3d(0,1,0) * bary[3];
-//    }
+        // quad in uv space
+        cps.vert_data(vid).uvw = vec3d(0,0,0) * bary[0] +
+                                 vec3d(1,0,0) * bary[1] +
+                                 vec3d(1,1,0) * bary[2] +
+                                 vec3d(0,1,0) * bary[3];
+    }
 }
 
 //::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
@@ -199,12 +212,13 @@ int main()
     igm.show_mesh_points();
     igm.updateGL();
 
-    map_igm_cps(igm,cps);
+    overlay_IGM_and_CPS(igm,cps);
+    bilinear_texturing(igm,cps);
     cps.updateGL();
 
     GLcanvas gui;
     gui.push(&cps);
-//    gui.push(&igm);
+    gui.push(&igm);
     gui.push(new SurfaceMeshControls<DrawableTrimesh<>> (&cps,&gui,"CPS"));
     gui.push(new SurfaceMeshControls<DrawableQuadmesh<>>(&igm,&gui,"IGM"));
     return gui.launch();
