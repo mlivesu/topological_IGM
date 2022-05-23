@@ -180,7 +180,7 @@ void bilinear_texturing(Quadmesh<> & igm,
 
 //::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
-void IGM(const uint genus, Quadmesh<> & igm)
+void topological_IGM(const uint genus, Quadmesh<> & igm)
 {
     std::vector<vec3d> verts = n_sided_polygon(4*genus, CIRCLE);
     for(const auto & p : verts) igm.vert_add(p);
@@ -216,13 +216,36 @@ void IGM(const uint genus, Quadmesh<> & igm)
 
 //::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
+void IGM(Trimesh<> & obj,
+         Trimesh<> & cps,
+         const uint  root)
+{
+    HomotopyBasisData hb;
+    hb.root              = root;
+    hb.globally_shortest = false;
+    hb.detach_loops      = true;
+    hb.split_strategy    = EDGE_SPLIT_STRATEGY;
+    homotopy_basis(obj,hb);
+
+    canonical_polygonal_schema(obj, hb, cps);
+
+    Quadmesh<> igm;
+    topological_IGM(obj.genus(),igm);
+
+    overlay_IGM_and_CPS(igm,cps,obj);
+    bilinear_texturing(igm,cps,obj);
+}
+
+//::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+
 int main()
 {
-    DrawableTrimesh<> obj("/Users/cino/Desktop/indorelax.obj"); //tmp_data/eight.off");
+    DrawableTrimesh<> obj("/Users/cino/Desktop/tmp_data/heptoroid_coarse.obj");
     uint genus = obj.genus();
 
     // compute homotopy basis
     HomotopyBasisData hb;
+    hb.root = 0;
     hb.globally_shortest = false;
     hb.detach_loops      = true;
     hb.split_strategy    = EDGE_SPLIT_STRATEGY;
@@ -232,7 +255,7 @@ int main()
     canonical_polygonal_schema(obj, hb, cps);
 
     DrawableQuadmesh<> igm;
-    IGM(genus,igm);
+    topological_IGM(genus,igm);
     igm.show_mesh_points();
 
     overlay_IGM_and_CPS(igm,cps,obj);
@@ -253,6 +276,21 @@ int main()
     cps.edge_mark_boundaries();
     cps.show_texture2D(TEXTURE_2D_CHECKERBOARD, 1);
     cps.updateGL();
+
+    gui1.callback_mouse_left_click = [&](int modifiers) -> bool
+    {
+        if(modifiers & GLFW_MOD_SHIFT)
+        {
+            vec3d p;
+            vec2d click = gui1.cursor_pos();
+            if(gui1.unproject(click, p)) // transform click in a 3d point
+            {
+                uint vid = obj.pick_vert(p);
+                std::cout << "Center Homotopy Basis at Vert " << vid << std::endl;
+            }
+        }
+        return false;
+    };
 
     return gui1.launch({&gui2});
 }
