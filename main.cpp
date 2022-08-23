@@ -240,57 +240,127 @@ void IGM(Trimesh<> & obj,
 
 int main()
 {
-    DrawableTrimesh<> obj("/Users/cino/Desktop/tmp_data/heptoroid_coarse.obj");
+    std::string s = "/Users/cino/Desktop/tmp_data/eight.off";
+    DrawableTrimesh<> obj(s.c_str());
+    DrawableTrimesh<> cps;
     uint genus = obj.genus();
 
+    DrawableSegmentSoup obj_loops;
+    DrawableSegmentSoup cps_edges;
+    obj_loops.draw_joint_spheres = true;
+    obj_loops.joint_sphere_subd = 2;
+    cps_edges.draw_joint_spheres = true;
+    cps_edges.joint_sphere_subd = 2;
+
     // compute homotopy basis
-    HomotopyBasisData hb;
-    hb.root = 0;
-    hb.globally_shortest = false;
-    hb.detach_loops      = true;
-    hb.split_strategy    = EDGE_SPLIT_STRATEGY;
-    homotopy_basis(obj,hb);
+    HomotopyBasisData data;
+    data.root              = 0;
+    data.globally_shortest = false;
+    data.detach_loops      = true;
+    data.split_strategy    = EDGE_SPLIT_STRATEGY;
 
-    DrawableTrimesh<> cps;
-    canonical_polygonal_schema(obj, hb, cps);
+    auto IGM = [&]()
+    {
+        homotopy_basis(obj, data);
+        canonical_polygonal_schema(obj, data, cps);
+        std::cout << data << std::endl;
+        // color code basis loops/CPS edges...
+        obj_loops.clear();
+        cps_edges.clear();
+        obj_loops.colors.clear();
+        cps_edges.colors.clear();
+        for(uint eid=0; eid<obj.num_edges(); ++eid)
+        {
+            if(obj.edge_is_boundary(eid))
+            {
+                uint v0 = obj.edge_vert_id(eid,0);
+                uint v1 = obj.edge_vert_id(eid,1);
+                int loop_id = obj.vert_data(v0).label;
+                if(loop_id<0) loop_id = obj.vert_data(v1).label;
+                Color c = Color::scatter(data.loops.size(),loop_id,1,1);
+                obj_loops.push_seg(obj.vert(v0),obj.vert(v1),c);
+            }
+        }
+        for(uint eid=0; eid<cps.num_edges(); ++eid)
+        {
+            if(cps.edge_is_boundary(eid))
+            {
+                uint v0 = cps.edge_vert_id(eid,0);
+                uint v1 = cps.edge_vert_id(eid,1);
+                int loop_id = cps.vert_data(v0).label;
+                if(loop_id<0) loop_id = cps.vert_data(v1).label;
+                Color c = Color::scatter(data.loops.size(),loop_id,1,1);
+                cps_edges.push_seg(cps.vert(v0),cps.vert(v1),c);
+            }
+        }
+        // overlay IGM template and do the IGM mapping
+        if(genus>1)
+        {
+            DrawableQuadmesh<> igm;
+            topological_IGM(genus,igm);
+            igm.show_mesh_points();
+            overlay_IGM_and_CPS(igm,cps,obj);
+            bilinear_texturing(igm,cps,obj);
+        }
+    };
 
-    DrawableQuadmesh<> igm;
-    topological_IGM(genus,igm);
-    igm.show_mesh_points();
+    IGM();
 
-    overlay_IGM_and_CPS(igm,cps,obj);
-    bilinear_texturing(igm,cps,obj);
-
-    GLcanvas gui1,gui2;
-    gui1.push(&obj);
-    gui2.push(&cps);
-    gui1.push(new SurfaceMeshControls<DrawableTrimesh<>> (&obj,&gui1,"OBJ"));
-    gui1.push(new SurfaceMeshControls<DrawableTrimesh<>> (&cps,&gui1,"CPS"));
-
-    obj.show_wireframe(false);
-    obj.edge_mark_boundaries();
+    GLcanvas gui_obj;
+    GLcanvas gui_cps;
     obj.show_texture2D(TEXTURE_2D_CHECKERBOARD, 1);
+    obj.show_wireframe(false);
     obj.updateGL();
-
-    cps.show_wireframe(false);
-    cps.edge_mark_boundaries();
+    gui_obj.push(&obj);
+    gui_obj.push(&obj_loops);
     cps.show_texture2D(TEXTURE_2D_CHECKERBOARD, 1);
+    cps.show_wireframe(false);
     cps.updateGL();
+    gui_cps.push(&cps);
+    gui_cps.push(&cps_edges);
 
-    gui1.callback_mouse_left_click = [&](int modifiers) -> bool
+    gui_obj.push(new SurfaceMeshControls<DrawableTrimesh<>> (&obj,&gui_obj,"OBJ"));
+    gui_obj.push(new SurfaceMeshControls<DrawableTrimesh<>> (&cps,&gui_obj,"CPS"));
+
+//    gui_obj.callback_mouse_left_click = [&](int modifiers) -> bool
+//    {
+//        if(modifiers & GLFW_MOD_SHIFT)
+//        {
+//            vec3d p;
+//            vec2d click = gui_obj.cursor_pos();
+//            if(gui_obj.unproject(click, p)) // transform click in a 3d point
+//            {
+//                uint vid = obj.pick_vert(p);
+//                std::cout << "Center Homotopy Basis at Vert " << vid << std::endl;
+//            }
+//        }
+//        return false;
+//    };
+    gui_obj.callback_mouse_left_click = [&](int modifiers) -> bool
     {
         if(modifiers & GLFW_MOD_SHIFT)
         {
             vec3d p;
-            vec2d click = gui1.cursor_pos();
-            if(gui1.unproject(click, p)) // transform click in a 3d point
+            vec2d click = gui_obj.cursor_pos();
+            if(gui_obj.unproject(click, p)) // transform click in a 3d point
             {
-                uint vid = obj.pick_vert(p);
-                std::cout << "Center Homotopy Basis at Vert " << vid << std::endl;
+                obj.load(s.c_str());
+                data.root = obj.pick_vert(p);
+                std::cout << "Center Homotopy Basis at Vertex ID " << data.root << std::endl;
+                IGM();
+                obj.updateGL();
             }
         }
         return false;
     };
 
-    return gui1.launch({&gui2});
+    // allow users to interactively edit cut thickness and color
+    gui_obj.callback_app_controls = [&]()
+    {
+        ImGui::Text("Cut Thicknesses");
+        ImGui::SliderFloat("#thickobj", &obj_loops.thickness,0,30);
+        ImGui::SliderFloat("#thickcps", &cps_edges.thickness,0,30);
+    };
+
+    return gui_obj.launch({&gui_cps});
 }
