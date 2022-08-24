@@ -182,7 +182,7 @@ void bilinear_texturing(Quadmesh<> & igm,
 
 void topological_IGM(const uint genus, Quadmesh<> & igm)
 {
-    std::vector<vec3d> verts = n_sided_polygon(4*genus, CIRCLE);
+    std::vector<vec3d> verts = n_sided_polygon(4*genus, CIRCLE);    
     for(const auto & p : verts) igm.vert_add(p);
     uint origin = igm.vert_add(vec3d(0,0,0)); // center point
 
@@ -216,31 +216,11 @@ void topological_IGM(const uint genus, Quadmesh<> & igm)
 
 //::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
-void IGM(Trimesh<> & obj,
-         Trimesh<> & cps,
-         const uint  root)
-{
-    HomotopyBasisData hb;
-    hb.root              = root;
-    hb.globally_shortest = false;
-    hb.detach_loops      = true;
-    hb.split_strategy    = EDGE_SPLIT_STRATEGY;
-    homotopy_basis(obj,hb);
-
-    canonical_polygonal_schema(obj, hb, cps);
-
-    Quadmesh<> igm;
-    topological_IGM(obj.genus(),igm);
-
-    overlay_IGM_and_CPS(igm,cps,obj);
-    bilinear_texturing(igm,cps,obj);
-}
-
-//::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
-
 int main()
 {
-    std::string s = "/Users/cino/Desktop/tmp_data/eight.off";
+    std::string s = "/Users/cino/Desktop/Screen_Bracket.obj";
+    //std::string s = "/Users/cino/Desktop/triblader-new-with-holes-3.5mm.stl";
+    //std::string s = "/Users/cino/Desktop/tmp_data/eight.off";
     DrawableTrimesh<> obj(s.c_str());
     DrawableTrimesh<> cps;
     uint genus = obj.genus();
@@ -251,6 +231,7 @@ int main()
     obj_loops.joint_sphere_subd = 2;
     cps_edges.draw_joint_spheres = true;
     cps_edges.joint_sphere_subd = 2;
+    cps_edges.thickness = 7;
 
     // compute homotopy basis
     HomotopyBasisData data;
@@ -279,17 +260,6 @@ int main()
                 if(loop_id<0) loop_id = obj.vert_data(v1).label;
                 Color c = Color::scatter(data.loops.size(),loop_id,1,1);
                 obj_loops.push_seg(obj.vert(v0),obj.vert(v1),c);
-            }
-        }
-        for(uint eid=0; eid<cps.num_edges(); ++eid)
-        {
-            if(cps.edge_is_boundary(eid))
-            {
-                uint v0 = cps.edge_vert_id(eid,0);
-                uint v1 = cps.edge_vert_id(eid,1);
-                int loop_id = cps.vert_data(v0).label;
-                if(loop_id<0) loop_id = cps.vert_data(v1).label;
-                Color c = Color::scatter(data.loops.size(),loop_id,1,1);
                 cps_edges.push_seg(cps.vert(v0),cps.vert(v1),c);
             }
         }
@@ -301,6 +271,8 @@ int main()
             igm.show_mesh_points();
             overlay_IGM_and_CPS(igm,cps,obj);
             bilinear_texturing(igm,cps,obj);
+            obj.edge_mark_boundaries();
+            cps.edge_mark_boundaries();
         }
     };
 
@@ -322,20 +294,6 @@ int main()
     gui_obj.push(new SurfaceMeshControls<DrawableTrimesh<>> (&obj,&gui_obj,"OBJ"));
     gui_obj.push(new SurfaceMeshControls<DrawableTrimesh<>> (&cps,&gui_obj,"CPS"));
 
-//    gui_obj.callback_mouse_left_click = [&](int modifiers) -> bool
-//    {
-//        if(modifiers & GLFW_MOD_SHIFT)
-//        {
-//            vec3d p;
-//            vec2d click = gui_obj.cursor_pos();
-//            if(gui_obj.unproject(click, p)) // transform click in a 3d point
-//            {
-//                uint vid = obj.pick_vert(p);
-//                std::cout << "Center Homotopy Basis at Vert " << vid << std::endl;
-//            }
-//        }
-//        return false;
-//    };
     gui_obj.callback_mouse_left_click = [&](int modifiers) -> bool
     {
         if(modifiers & GLFW_MOD_SHIFT)
@@ -349,6 +307,7 @@ int main()
                 std::cout << "Center Homotopy Basis at Vertex ID " << data.root << std::endl;
                 IGM();
                 obj.updateGL();
+                cps.updateGL();
             }
         }
         return false;
