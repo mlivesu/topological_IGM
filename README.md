@@ -1,5 +1,3 @@
-# Topological Initialization of Injective Integer Grid Maps
-
 This repository contains the author's reference implementation of the article 
 
 **Topological Initialization of Injective Integer Grid Maps**<br />
