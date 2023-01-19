@@ -10,6 +10,7 @@
 #include <cinolib/geometry/segment_utils.h>
 #include <cinolib/dijkstra.h>
 #include <cinolib/connected_components.h>
+#include <cinolib/gluing_scheme.h>
 
 using namespace cinolib;
 
@@ -218,9 +219,10 @@ void topological_IGM(const uint genus, Quadmesh<> & igm)
 
 int main()
 {
-    std::string s = "/Users/cino/Desktop/Screen_Bracket.obj";
+    //std::string s = "/Users/cino/Desktop/Screen_Bracket.obj";
     //std::string s = "/Users/cino/Desktop/triblader-new-with-holes-3.5mm.stl";
     //std::string s = "/Users/cino/Desktop/tmp_data/eight.off";
+    std::string s = "/Users/cino/Desktop/tmp_data/fertility.obj";
     DrawableTrimesh<> obj(s.c_str());
     DrawableTrimesh<> cps;
     uint genus = obj.genus();
@@ -243,6 +245,7 @@ int main()
     auto IGM = [&]()
     {
         homotopy_basis(obj, data);
+        gluing_scheme_force_normal_form(obj,data);
         canonical_polygonal_schema(obj, data, cps);
         std::cout << data << std::endl;
         // color code basis loops/CPS edges...
